@@ -13,9 +13,12 @@ pub struct Browser {
 
 impl Browser {
     pub fn new() -> Self {
+        let mut tab = TabManager::new();
+        tab.open_tab("Google".to_string(), "https://www.google.com".to_string());
+
         Self {
             should_quit: false,
-            tab_manager: TabManager::new(),
+            tab_manager: tab,
         }
     }
 

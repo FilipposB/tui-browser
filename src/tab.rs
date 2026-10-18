@@ -31,11 +31,12 @@ impl Widget for &Tab {
 }
 
 impl EventHandling for Tab {
-    fn handle_events(&self, event: &Event) {
+    fn handle_events(&mut self, event: &Event) {
         match event {
             Event::Key(_) => {}
             _ => {}
         }
+        self.engine.handle_event(event);
     }
 }
 
@@ -61,7 +62,13 @@ impl TabManager {
             id: tab_id,
             title,
             url,
-            engine: Engine::load("123")
+            engine: Engine::load(r#"
+<div border="true">
+    <input id="username" value="" />
+    <input id="password" value="" />
+    <button id="submit" label="Submit Form" />
+</div>
+"#)
         };
         self.opened_tabs.push(tab);
         self.activate_tab(tab_id);
@@ -70,11 +77,15 @@ impl TabManager {
 }
 
 impl EventHandling for TabManager {
-    fn handle_events(&self, event: &Event) {
+    fn handle_events(&mut self, event: &Event) {
         match event {
             Event::Key(_) => {}
             _ => {}
         }
-        self.active_tab.and_then(|id| self.opened_tabs.get(id)).map(|tab| tab.handle_events(event));
+        if let Some(id) = self.active_tab {
+            if let Some(tab) = self.opened_tabs.get_mut(id) {
+                tab.handle_events(event);
+            }
+        }
     }
 }
