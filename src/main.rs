@@ -7,8 +7,9 @@ mod widgets;
 mod css;
 
 fn main() -> std::io::Result<()> {
+    let mut browser = browser::Browser::new()?;
     let mut terminal = ratatui::init();
-    let result = browser::Browser::new().run(&mut terminal);
+    let result = browser.run(&mut terminal);
     ratatui::restore();
     result
 }

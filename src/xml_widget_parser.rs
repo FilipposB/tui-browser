@@ -10,6 +10,7 @@ pub struct XmlParser;
 pub struct ParsedDocument {
     pub widgets: Vec<Widget>,
     pub stylesheet: Stylesheet,
+    pub title: Option<String>,
 }
 
 impl XmlParser {
@@ -19,6 +20,7 @@ impl XmlParser {
 
         let mut widgets = Vec::new();
         let mut stylesheet = Stylesheet::default();
+        let mut title = None;
         let mut buf = Vec::new();
 
         loop {
@@ -27,13 +29,18 @@ impl XmlParser {
                     let tag = tag_name(&e);
                     if tag == "style" {
                         stylesheet = Self::parse_style_block(&mut reader)?;
-                    } else if let Some(widget) = Self::parse_element(&mut reader, &e, &tag, false)? {
+                    } else if tag == "title" {
+                        title = Some(Self::parse_title(&mut reader, &e)?);
+                    } else if let Some(widget) = Self::parse_element(&mut reader, &e, &tag, false)?
+                    {
                         widgets.push(widget);
                     }
                 }
                 Ok(XmlEvent::Empty(e)) => {
                     let tag = tag_name(&e);
-                    if let Some(widget) = Self::parse_element(&mut reader, &e, &tag, true)? {
+                    if tag == "title" {
+                        title = get_attr(&e, "value")?;
+                    } else if let Some(widget) = Self::parse_element(&mut reader, &e, &tag, true)? {
                         widgets.push(widget);
                     }
                 }
@@ -44,7 +51,47 @@ impl XmlParser {
             buf.clear();
         }
 
-        Ok(ParsedDocument { widgets, stylesheet })
+        Ok(ParsedDocument {
+            widgets,
+            stylesheet,
+            title,
+        })
+    }
+
+    fn parse_title(reader: &mut Reader<&[u8]>, event: &BytesStart) -> Result<String, String> {
+        let mut title = get_attr(event, "value")?.unwrap_or_default();
+        if !title.is_empty() {
+            let mut buf = Vec::new();
+            loop {
+                match reader.read_event_into(&mut buf) {
+                    Ok(XmlEvent::End(e)) if e.name().as_ref() == b"title" => break,
+                    Ok(XmlEvent::Eof) => return Err("Unexpected EOF in <title>".to_string()),
+                    Err(error) => return Err(format!("XML parse error: {error}")),
+                    _ => {}
+                }
+                buf.clear();
+            }
+            return Ok(title);
+        }
+
+        let mut buf = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(XmlEvent::Text(text)) => {
+                    title.push_str(
+                        &text
+                            .unescape()
+                            .map_err(|error| format!("Title text error: {error}"))?,
+                    );
+                }
+                Ok(XmlEvent::End(e)) if e.name().as_ref() == b"title" => break,
+                Ok(XmlEvent::Eof) => return Err("Unexpected EOF in <title>".to_string()),
+                Err(error) => return Err(format!("XML parse error: {error}")),
+                _ => {}
+            }
+            buf.clear();
+        }
+        Ok(title.trim().to_string())
     }
 
     /// Read the text content of a `<style>...</style>` element and parse it.
@@ -84,21 +131,45 @@ impl XmlParser {
                 };
                 Ok(Some(Widget::Div(DivWidget { attrs, children })))
             }
+            "form" => {
+                let onsubmit = get_attr(event, "onsubmit")?;
+                let children = if empty {
+                    Vec::new()
+                } else {
+                    Self::parse_children(reader)?
+                };
+                Ok(Some(Widget::Form(FormWidget {
+                    attrs,
+                    onsubmit,
+                    children,
+                })))
+            }
             "button" => {
                 let label = get_attr(event, "label")?.unwrap_or_default();
+                let onclick = get_attr(event, "onclick")?;
                 Ok(Some(Widget::Button(ButtonWidget {
                     attrs,
                     label,
+                    onclick,
                     focused: false,
                 })))
             }
             "input" => {
                 let value = get_attr(event, "value")?.unwrap_or_default();
+                let label = get_attr(event, "label")?;
+                let password = get_attr(event, "type")?
+                    .is_some_and(|input_type| input_type.eq_ignore_ascii_case("password"));
                 Ok(Some(Widget::Input(InputWidget {
                     attrs,
                     value,
+                    label,
+                    password,
                     focused: false,
                 })))
+            }
+            "divider" => {
+                let label = get_attr(event, "label")?;
+                Ok(Some(Widget::Divider(DividerWidget { attrs, label })))
             }
             "text" => {
                 let value = get_attr(event, "value")?.unwrap_or_default();
@@ -168,4 +239,37 @@ fn get_attr(event: &BytesStart, name: &str) -> Result<Option<String>, String> {
         }
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::XmlParser;
+    use crate::widgets::Widget;
+
+    #[test]
+    fn parses_input_and_divider_labels() {
+        let document = XmlParser::parse(
+            r#"<input label="Email" value="user@example.com"/><divider label="OR"/>"#,
+        )
+        .unwrap();
+
+        match &document.widgets[0] {
+            Widget::Input(input) => assert_eq!(input.label.as_deref(), Some("Email")),
+            _ => panic!("expected input widget"),
+        }
+        match &document.widgets[1] {
+            Widget::Divider(divider) => assert_eq!(divider.label.as_deref(), Some("OR")),
+            _ => panic!("expected divider widget"),
+        }
+    }
+
+    #[test]
+    fn parses_document_title_from_text_or_value_attribute() {
+        let text_title = XmlParser::parse("<title>My page</title><text value=\"body\"/>").unwrap();
+        assert_eq!(text_title.title.as_deref(), Some("My page"));
+
+        let attribute_title =
+            XmlParser::parse("<title value=\"Another page\"/><text value=\"body\"/>").unwrap();
+        assert_eq!(attribute_title.title.as_deref(), Some("Another page"));
+    }
 }
